@@ -1,9 +1,12 @@
 "use client"
 
-import { Barbershop, BarbershopService, Booking } from "@prisma/client"
-import Image from "next/image"
+import { useMemo, useState, useTransition } from "react"
+import { format, set } from "date-fns"
+import { ptBR } from "date-fns/locale"
+import { Calendar } from "./ui/calendar"
 import { Button } from "./ui/button"
 import { Card, CardContent } from "./ui/card"
+import { Input } from "./ui/input"
 import {
   Sheet,
   SheetContent,
@@ -11,288 +14,301 @@ import {
   SheetHeader,
   SheetTitle,
 } from "./ui/sheet"
-import { Calendar } from "./ui/calendar"
-import { ptBR } from "date-fns/locale"
-import { useEffect, useMemo, useState } from "react"
-import { isPast, isToday, set } from "date-fns"
-import { createBooking } from "../_actions/create-booking"
-import { useSession } from "next-auth/react"
 import { toast } from "sonner"
-import { getBookings } from "../_actions/get-bookings"
-import { Dialog, DialogContent } from "./ui/dialog"
-import SignInDialog from "./sign-in-dialog"
-import BookingSummary from "./booking-summary"
-import { useRouter } from "next/navigation"
+import { getAvailability } from "@/app/_actions/studioPublic/get-availability"
+import { createAppointment } from "@/app/_actions/studioPublic/create-appointment"
+import {
+  type StudioProfessional,
+  type StudioService,
+} from "@/app/_lib/studioPublic/types"
 
 interface ServiceItemProps {
-  service: BarbershopService
-  barbershop: Pick<Barbershop, "name">
+  service: StudioService
+  professionals: StudioProfessional[]
 }
 
-const TIME_LIST = [
-  "08:00",
-  "08:30",
-  "09:00",
-  "09:30",
-  "10:00",
-  "10:30",
-  "11:00",
-  "11:30",
-  "12:00",
-  "12:30",
-  "13:00",
-  "13:30",
-  "14:00",
-  "14:30",
-  "15:00",
-  "15:30",
-  "16:00",
-  "16:30",
-  "17:00",
-  "17:30",
-  "18:00",
-]
-
-interface GetTimeListProps {
-  bookings: Booking[]
-  selectedDay: Date
-}
-
-const getTimeList = ({ bookings, selectedDay }: GetTimeListProps) => {
-  return TIME_LIST.filter((time) => {
-    const hour = Number(time.split(":")[0])
-    const minutes = Number(time.split(":")[1])
-
-    const timeIsOnThePast = isPast(set(new Date(), { hours: hour, minutes }))
-    if (timeIsOnThePast && isToday(selectedDay)) {
-      return false
-    }
-
-    const hasBookingOnCurrentTime = bookings.some(
-      (booking) =>
-        booking.date.getHours() === hour &&
-        booking.date.getMinutes() === minutes,
-    )
-    if (hasBookingOnCurrentTime) {
-      return false
-    }
-    return true
-  })
-}
-
-const ServiceItem = ({ service, barbershop }: ServiceItemProps) => {
-  const { data } = useSession()
-  const router = useRouter()
-  const [signInDialogIsOpen, setSignInDialogIsOpen] = useState(false)
-  const [selectedDay, setSelectedDay] = useState<Date | undefined>(undefined)
-  const [selectedTime, setSelectedTime] = useState<string | undefined>(
-    undefined,
-  )
-  const [dayBookings, setDayBookings] = useState<Booking[]>([])
+const ServiceItem = ({ service, professionals }: ServiceItemProps) => {
   const [bookingSheetIsOpen, setBookingSheetIsOpen] = useState(false)
+  const [selectedProfessionalId, setSelectedProfessionalId] = useState<
+    number | null
+  >(null)
+  const [selectedDay, setSelectedDay] = useState<Date | undefined>()
+  const [availableTimes, setAvailableTimes] = useState<string[]>([])
+  const [selectedTime, setSelectedTime] = useState<string | null>(null)
+  const [isLoadingTimes, startLoadingTimes] = useTransition()
+  const [isSubmitting, startSubmitting] = useTransition()
 
-  useEffect(() => {
-    const fetch = async () => {
-      if (!selectedDay) return
-      const bookings = await getBookings({
-        date: selectedDay,
-        serviceId: service.id,
-      })
-      setDayBookings(bookings)
+  const [name, setName] = useState("")
+  const [phone, setPhone] = useState("")
+  const [email, setEmail] = useState("")
+
+  const resetForm = () => {
+    setSelectedDay(undefined)
+    setSelectedProfessionalId(null)
+    setSelectedTime(null)
+    setAvailableTimes([])
+    setName("")
+    setPhone("")
+    setEmail("")
+  }
+
+  const handleSheetChange = (open: boolean) => {
+    setBookingSheetIsOpen(open)
+
+    if (!open) {
+      resetForm()
     }
-    fetch()
-  }, [selectedDay, service.id])
+  }
 
   const selectedDate = useMemo(() => {
-    if (!selectedDay || !selectedTime) return
+    if (!selectedDay || !selectedTime) {
+      return null
+    }
+
+    const [hours, minutes] = selectedTime.split(":").map(Number)
+
     return set(selectedDay, {
-      hours: Number(selectedTime?.split(":")[0]),
-      minutes: Number(selectedTime?.split(":")[1]),
+      hours,
+      minutes,
+      seconds: 0,
+      milliseconds: 0,
     })
   }, [selectedDay, selectedTime])
 
-  const handleBookingClick = () => {
-    if (data?.user) {
-      return setBookingSheetIsOpen(true)
-    }
-    return setSignInDialogIsOpen(true)
-  }
+  const loadTimes = (date: Date, professionalId: number) => {
+    const formattedDate = format(date, "yyyy-MM-dd")
 
-  const handleBookingSheetOpenChange = () => {
-    setSelectedDay(undefined)
-    setSelectedTime(undefined)
-    setDayBookings([])
-    setBookingSheetIsOpen(false)
+    startLoadingTimes(async () => {
+      try {
+        const times = await getAvailability({
+          date: formattedDate,
+          professionalId,
+          serviceId: Number(service.id),
+        })
+
+        setAvailableTimes(times)
+        setSelectedTime(null)
+      } catch (error) {
+        console.error(error)
+        setAvailableTimes([])
+        setSelectedTime(null)
+        toast.error("Não foi possível carregar os horários.")
+      }
+    })
   }
 
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDay(date)
+    setSelectedTime(null)
+
+    if (!date || !selectedProfessionalId) {
+      setAvailableTimes([])
+      return
+    }
+
+    loadTimes(date, selectedProfessionalId)
   }
 
-  const handleTimeSelect = (time: string) => {
-    setSelectedTime(time)
-  }
+  const handleProfessionalChange = (professionalIdValue: string) => {
+    if (!professionalIdValue) {
+      setSelectedProfessionalId(null)
+      setAvailableTimes([])
+      setSelectedTime(null)
+      return
+    }
 
-  const handleCreateBooking = async () => {
-    try {
-      if (!selectedDate) return
-      await createBooking({
-        serviceId: service.id,
-        date: selectedDate,
-      })
-      handleBookingSheetOpenChange()
-      toast.success("Reserva criada com sucesso!", {
-        action: {
-          label: "Ver agendamentos",
-          onClick: () => router.push("/bookings"),
-        },
-      })
-    } catch (error) {
-      console.error(error)
-      toast.error("Erro ao criar reserva!")
+    const professionalId = Number(professionalIdValue)
+    setSelectedProfessionalId(professionalId)
+    setSelectedTime(null)
+
+    if (selectedDay) {
+      loadTimes(selectedDay, professionalId)
     }
   }
 
-  const timeList = useMemo(() => {
-    if (!selectedDay) return []
-    return getTimeList({
-      bookings: dayBookings,
-      selectedDay,
+  const handleCreateAppointment = () => {
+    if (!selectedProfessionalId || !selectedDay || !selectedTime) {
+      toast.error("Selecione profissional, data e horário.")
+      return
+    }
+
+    if (!name.trim() || !phone.trim()) {
+      toast.error("Nome e telefone são obrigatórios.")
+      return
+    }
+
+    startSubmitting(async () => {
+      try {
+        await createAppointment({
+          customer: {
+            name: name.trim(),
+            phone: phone.trim(),
+            email: email.trim() || undefined,
+          },
+          service_id: Number(service.id),
+          professional_id: selectedProfessionalId,
+          date: format(selectedDay, "yyyy-MM-dd"),
+          time: selectedTime,
+        })
+
+        handleSheetChange(false)
+        toast.success("Agendamento criado com sucesso!")
+      } catch (error) {
+        console.error(error)
+        toast.error("Não foi possível concluir o agendamento.")
+      }
     })
-  }, [dayBookings, selectedDay])
+  }
 
   return (
-    <>
-      <Card>
-        <CardContent className="flex items-center gap-3 p-3">
-          {/* IMAGE */}
-          <div className="relative max-h-[110px] min-h-[110px] min-w-[110px] max-w-[110px]">
-            <Image
-              alt={service.name}
-              src={service.imageUrl}
-              fill
-              className="rounded-lg object-cover"
-            />
-          </div>
-          {/* DIREITA */}
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold">{service.name}</h3>
+    <Card>
+      <CardContent className="space-y-3 p-3">
+        <div>
+          <h3 className="text-sm font-semibold">{service.name}</h3>
+          {service.description && (
             <p className="text-sm text-gray-400">{service.description}</p>
-            {/* PREÇO E BOTÃO */}
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-bold text-primary">
-                {Intl.NumberFormat("pt-BR", {
-                  style: "currency",
-                  currency: "BRL",
-                }).format(Number(service.price))}
-              </p>
+          )}
+        </div>
 
-              <Sheet
-                open={bookingSheetIsOpen}
-                onOpenChange={handleBookingSheetOpenChange}
-              >
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleBookingClick}
-                >
-                  Reservar
-                </Button>
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-bold text-primary">
+            {Intl.NumberFormat("pt-BR", {
+              style: "currency",
+              currency: "BRL",
+            }).format(Number(service.price))}
+          </p>
 
-                <SheetContent className="px-0">
-                  <SheetHeader>
-                    <SheetTitle>Fazer Reserva</SheetTitle>
-                  </SheetHeader>
+          <Sheet open={bookingSheetIsOpen} onOpenChange={handleSheetChange}>
+            <Button variant="secondary" size="sm">
+              Agendar
+            </Button>
 
-                  <div className="border-b border-solid py-5">
-                    <Calendar
-                      mode="single"
-                      locale={ptBR}
-                      selected={selectedDay}
-                      onSelect={handleDateSelect}
-                      fromDate={new Date()}
-                      styles={{
-                        head_cell: {
-                          width: "100%",
-                          textTransform: "capitalize",
-                        },
-                        cell: {
-                          width: "100%",
-                        },
-                        button: {
-                          width: "100%",
-                        },
-                        nav_button_previous: {
-                          width: "32px",
-                          height: "32px",
-                        },
-                        nav_button_next: {
-                          width: "32px",
-                          height: "32px",
-                        },
-                        caption: {
-                          textTransform: "capitalize",
-                        },
-                      }}
-                    />
-                  </div>
+            <SheetContent className="px-0">
+              <SheetHeader>
+                <SheetTitle>Agendar serviço</SheetTitle>
+              </SheetHeader>
 
-                  {selectedDay && (
-                    <div className="flex gap-3 overflow-x-auto border-b border-solid p-5 [&::-webkit-scrollbar]:hidden">
-                      {timeList.length > 0 ? (
-                        timeList.map((time) => (
+              <div className="space-y-4 border-b border-solid p-5">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Profissional</label>
+                  <select
+                    className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                    value={selectedProfessionalId ?? ""}
+                    onChange={(event) =>
+                      handleProfessionalChange(event.currentTarget.value)
+                    }
+                  >
+                    <option value="" disabled>
+                      Selecione um profissional
+                    </option>
+                    {professionals.map((professional) => (
+                      <option key={professional.id} value={professional.id}>
+                        {professional.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <Calendar
+                  mode="single"
+                  locale={ptBR}
+                  selected={selectedDay}
+                  onSelect={handleDateSelect}
+                  fromDate={new Date()}
+                  styles={{
+                    head_cell: {
+                      width: "100%",
+                      textTransform: "capitalize",
+                    },
+                    cell: {
+                      width: "100%",
+                    },
+                    button: {
+                      width: "100%",
+                    },
+                    nav_button_previous: {
+                      width: "32px",
+                      height: "32px",
+                    },
+                    nav_button_next: {
+                      width: "32px",
+                      height: "32px",
+                    },
+                    caption: {
+                      textTransform: "capitalize",
+                    },
+                  }}
+                />
+
+                {selectedDay && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Horários disponíveis</p>
+                    <div className="flex gap-2 overflow-x-auto [&::-webkit-scrollbar]:hidden">
+                      {isLoadingTimes ? (
+                        <p className="text-xs text-gray-400">
+                          Carregando horários...
+                        </p>
+                      ) : availableTimes.length > 0 ? (
+                        availableTimes.map((time) => (
                           <Button
                             key={time}
                             variant={
                               selectedTime === time ? "default" : "outline"
                             }
                             className="rounded-full"
-                            onClick={() => handleTimeSelect(time)}
+                            onClick={() => setSelectedTime(time)}
                           >
                             {time}
                           </Button>
                         ))
                       ) : (
-                        <p className="text-xs">
+                        <p className="text-xs text-gray-400">
                           Não há horários disponíveis para este dia.
                         </p>
                       )}
                     </div>
-                  )}
+                  </div>
+                )}
+              </div>
 
-                  {selectedDate && (
-                    <div className="p-5">
-                      <BookingSummary
-                        barbershop={barbershop}
-                        service={service}
-                        selectedDate={selectedDate}
-                      />
-                    </div>
-                  )}
-                  <SheetFooter className="mt-5 px-5">
-                    <Button
-                      onClick={handleCreateBooking}
-                      disabled={!selectedDay || !selectedTime}
-                    >
-                      Confirmar
-                    </Button>
-                  </SheetFooter>
-                </SheetContent>
-              </Sheet>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+              <div className="space-y-3 p-5">
+                <Input
+                  placeholder="Seu nome"
+                  value={name}
+                  onChange={(event) => setName(event.currentTarget.value)}
+                />
+                <Input
+                  placeholder="Seu telefone"
+                  value={phone}
+                  onChange={(event) => setPhone(event.currentTarget.value)}
+                />
+                <Input
+                  placeholder="Seu email (opcional)"
+                  value={email}
+                  onChange={(event) => setEmail(event.currentTarget.value)}
+                />
+              </div>
 
-      <Dialog
-        open={signInDialogIsOpen}
-        onOpenChange={(open) => setSignInDialogIsOpen(open)}
-      >
-        <DialogContent className="w-[90%]">
-          <SignInDialog />
-        </DialogContent>
-      </Dialog>
-    </>
+              {selectedDate && (
+                <p className="px-5 text-xs text-gray-400">
+                  Horário selecionado:{" "}
+                  {format(selectedDate, "dd/MM/yyyy 'às' HH:mm")}
+                </p>
+              )}
+
+              <SheetFooter className="mt-5 px-5">
+                <Button
+                  onClick={handleCreateAppointment}
+                  disabled={isSubmitting || professionals.length === 0}
+                >
+                  {isSubmitting ? "Confirmando..." : "Confirmar"}
+                </Button>
+              </SheetFooter>
+            </SheetContent>
+          </Sheet>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
