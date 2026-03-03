@@ -168,6 +168,9 @@ const ServiceItem = ({ service, professionals }: ServiceItemProps) => {
           {service.description && (
             <p className="text-sm text-gray-400">{service.description}</p>
           )}
+          <p className="mt-1 text-xs text-gray-500">
+            Duração estimada: {service.duration} min
+          </p>
         </div>
 
         <div className="flex items-center justify-between">
