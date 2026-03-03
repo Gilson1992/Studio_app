@@ -26,6 +26,10 @@ const Home = async () => {
             <p className="text-sm text-gray-400">
               Nenhum serviço ativo disponível no momento.
             </p>
+          ) : professionals.length === 0 ? (
+            <p className="text-sm text-gray-400">
+              Nenhum profissional ativo disponível no momento.
+            </p>
           ) : (
             <div className="space-y-3">
               {services.map((service) => (

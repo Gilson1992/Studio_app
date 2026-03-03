@@ -12,6 +12,13 @@ export interface StudioProfessional {
   name: string
   phone?: string | null
   specialties?: string | null
+  work_schedule?: string | null
+  open_windows?: {
+    id: number
+    start_date: string
+    end_date: string
+    status: "open" | "closed"
+  }[]
 }
 
 export interface AvailabilityResponse {
